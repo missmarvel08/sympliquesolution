@@ -1,0 +1,83 @@
+1. Cold Storage Setup
+Create a Blob Container:
+
+
+az storage container create \
+  --name archived-billing-records \
+  --account-name <your-storage-account> \
+  --public-access off
+2. Archival Function (Durable Function)
+Trigger: Timer (e.g., daily)
+
+Responsibilities:
+
+Query Cosmos DB for records older than 90 days
+
+Save them to Blob Storage as JSON
+
+Delete from Cosmos DB after successful write
+
+Pseudocode:
+
+
+def archive_old_billing_records():
+    old_records = cosmos.query("SELECT * FROM c WHERE c.timestamp < DATE_SUB(NOW(), INTERVAL 90 DAY)")
+    for record in old_records:
+        blob_path = f"{record['id']}.json"
+        blob_storage.upload(blob_path, json.dumps(record))
+        cosmos.delete(record['id'])
+3. Seamless Data Access (Wrapper Function)
+Wrap your read API logic to:
+
+Try to get record from Cosmos DB
+
+On miss, fetch from Blob Storage
+
+Return the same response shape
+
+Pseudocode:
+
+
+def get_billing_record(record_id):
+    record = cosmos.read(record_id)
+    if record:
+        return record
+    else:
+        blob_data = blob_storage.download(f"{record_id}.json")
+        if blob_data:
+            return json.loads(blob_data)
+        else:
+            return {"error": "Record not found"}, 404
+4. Optional: Metadata Index Table
+To speed up Blob lookup, keep an index table in Azure Table Storage or Cosmos DB with:
+
+record_id	archived	blob_path
+
+Use it to avoid scanning blobs unnecessarily.
+
+5. Auto-Delete with TTL (Optional)
+Enable TTL on Cosmos DB for old records once archival is proven:
+
+
+{
+  "ttl": 7776000  // 90 days in seconds
+}
+✅ Benefits vs. Requirements
+Requirement	Met?	How
+Cost Optimization	✅	Reduce Cosmos DB RU/s and storage usage
+Ease of Implementation	✅	Uses Azure-native components, minimal changes
+No Data Loss	✅	Durable Function ensures successful copy before deletion
+No Downtime	✅	Background tasks; APIs not interrupted
+No API Changes	✅	Wrapper maintains exact contract
+
+🧪 Azure CLI / Script Snippets
+Grant function access to Blob:
+
+az functionapp identity assign --name <func-app> --resource-group <rg>
+az role assignment create \
+  --assignee <principal-id> \
+  --scope /subscriptions/<sub-id>/resourceGroups/<rg>/providers/Microsoft.Storage/storageAccounts/<storage-account> \
+  --role "Storage Blob Data Contributor"
+Cosmos DB query example:
+
+SELECT * FROM c WHERE c.timestamp < @oldDate
